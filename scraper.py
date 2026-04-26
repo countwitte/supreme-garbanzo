@@ -52,17 +52,18 @@ class ChessScotlandScraper:
             # Get standard grade
             await page.goto(f"{self.base_url}/grading/player/{pnum}/2026/Standard")
             await page.wait_for_load_state('networkidle')
-            standard_html = await page.content()
-            grade = self._extract_grade(standard_html, "Standard")
+            # Get grade from page text - look for 4-digit numbers in main content
+            standard_text = await page.inner_text('main')
+            grade = self._extract_grade(standard_text, "Standard")
             
             # Get allegro grade
             await page.goto(f"{self.base_url}/grading/player/{pnum}/2026/Allegro")
             await page.wait_for_load_state('networkidle')
-            allegro_html = await page.content()
-            allegro = self._extract_grade(allegro_html, "Allegro")
+            allegro_text = await page.inner_text('main')
+            allegro = self._extract_grade(allegro_text, "Allegro")
             
-            # Get club from standard page
-            club = self._extract_club(standard_html)
+            # Get club from standard page text
+            club = self._extract_club(standard_text)
             
             await browser.close()
             return {
@@ -73,17 +74,13 @@ class ChessScotlandScraper:
                 "club": club,
             }
 
-    def _extract_grade(self, html: str, grade_type: str) -> Optional[int]:
+    def _extract_grade(self, text: str, grade_type: str) -> Optional[int]:
         import re
-        # Get page text and look for grade in the 900-950 range
-        text = re.sub(r'<[^>]+>', ' ', html)  # strip HTML tags
-        # Look for 904 or 940 based on grade_type
-        target = 940 if grade_type == "Allegro" else 904
-        # Find all numbers in range 800-999
-        matches = re.findall(r'\b([89]\d{2})\b', text)
+        # Find all 4-digit numbers that could be grades
+        matches = re.findall(r'\b(\d{4})\b', text)
         for m in matches:
             val = int(m)
-            if abs(val - target) <= 50:  # close to expected
+            if val not in [2024, 2025, 2026] and 100 <= val <= 2500:
                 return val
         return None
 
