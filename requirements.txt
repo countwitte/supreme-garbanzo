@@ -1,0 +1,5 @@
+pydantic-ai
+crawl4ai
+ollama
+playwright
+aiohttp
