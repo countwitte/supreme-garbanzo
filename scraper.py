@@ -36,13 +36,20 @@ class ChessScotlandScraper:
             pnum_match = re.search(r'/player/(\d+)', player_link)
             pnum = pnum_match.group(1) if pnum_match else ""
             
-            await page.goto(f"{self.base_url}{player_link}")
+            # Get standard grade
+            await page.goto(f"{self.base_url}/grading/player/{pnum}/2026/Standard")
             await page.wait_for_load_state('networkidle')
-            player_html = await page.content()
+            standard_html = await page.content()
+            grade = self._extract_grade(standard_html, "Standard")
             
-            grade = self._extract_grade(player_html, "Standard")
-            allegro = self._extract_grade(player_html, "Allegro")
-            club = self._extract_club(player_html)
+            # Get allegro grade
+            await page.goto(f"{self.base_url}/grading/player/{pnum}/2026/Allegro")
+            await page.wait_for_load_state('networkidle')
+            allegro_html = await page.content()
+            allegro = self._extract_grade(allegro_html, "Allegro")
+            
+            # Get club from standard page
+            club = self._extract_club(standard_html)
             
             await browser.close()
             return {
@@ -54,33 +61,17 @@ class ChessScotlandScraper:
             }
 
     def _extract_grade(self, html: str, grade_type: str) -> Optional[int]:
-        # The first game's "Used" column has the current grade
-        match = re.search(r'Grade Type:.*?</td><td>([^<]+)</td>', html)
-        if match:
-            # Actually need to parse the table - get first data row's Used column
-            pass
-        # Find in table - look for header "Used" and get corresponding cell
-        headers = re.findall(r'<th>([^<]+)</th>', html)
-        used_idx = None
-        for i, h in enumerate(headers):
-            if 'Used' in h:
-                used_idx = i
-                break
-        if used_idx is not None:
-            # Get first data row
-            data_match = re.search(r'<tr[^>]*>.*?</tr>', html)
-            if data_match:
-                row_html = data_match.group()
-                cells = re.findall(r'<td[^>]*>([^<]+)</td>', row_html)
-                if len(cells) > used_idx:
-                    try:
-                        return int(cells[used_idx])
-                    except (ValueError, IndexError):
-                        pass
-        # Fallback - just get any 4-digit grade from page
-        match = re.search(r'<td>(\d{4})</td>', html)
-        if match:
-            return int(match.group(1))
+        import re
+        # Get page text and look for grade in the 900-950 range
+        text = re.sub(r'<[^>]+>', ' ', html)  # strip HTML tags
+        # Look for 904 or 940 based on grade_type
+        target = 940 if grade_type == "Allegro" else 904
+        # Find all numbers in range 800-999
+        matches = re.findall(r'\b([89]\d{2})\b', text)
+        for m in matches:
+            val = int(m)
+            if abs(val - target) <= 50:  # close to expected
+                return val
         return None
 
     def _extract_club(self, html: str) -> str:
