@@ -54,8 +54,31 @@ class ChessScotlandScraper:
             }
 
     def _extract_grade(self, html: str, grade_type: str) -> Optional[int]:
-        # Look for the grade in a table cell that's labeled with the grade type
-        match = re.search(rf'{grade_type}</td><td>(\d+)</td>', html)
+        # The first game's "Used" column has the current grade
+        match = re.search(r'Grade Type:.*?</td><td>([^<]+)</td>', html)
+        if match:
+            # Actually need to parse the table - get first data row's Used column
+            pass
+        # Find in table - look for header "Used" and get corresponding cell
+        headers = re.findall(r'<th>([^<]+)</th>', html)
+        used_idx = None
+        for i, h in enumerate(headers):
+            if 'Used' in h:
+                used_idx = i
+                break
+        if used_idx is not None:
+            # Get first data row
+            data_match = re.search(r'<tr[^>]*>.*?</tr>', html)
+            if data_match:
+                row_html = data_match.group()
+                cells = re.findall(r'<td[^>]*>([^<]+)</td>', row_html)
+                if len(cells) > used_idx:
+                    try:
+                        return int(cells[used_idx])
+                    except (ValueError, IndexError):
+                        pass
+        # Fallback - just get any 4-digit grade from page
+        match = re.search(r'<td>(\d{4})</td>', html)
         if match:
             return int(match.group(1))
         return None
