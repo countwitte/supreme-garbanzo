@@ -1,6 +1,7 @@
 import asyncio
+import re
 from typing import Optional, List, Dict, Any
-from crawl4ai import AsyncWebCrawler, JsonCssExtractionStrategy, CrawlerRunConfig
+from playwright.async_api import async_playwright
 
 
 class ChessScotlandScraper:
@@ -8,147 +9,114 @@ class ChessScotlandScraper:
         self.base_url = "https://www.chessscotland.com"
 
     async def get_player_data(self, name: str) -> Optional[Dict[str, Any]]:
-        url = f"{self.base_url}/membership/members/"
-        
-        extraction_strategy = JsonCssExtractionStrategy(
-            {
-                "baseSelector": "tr:has(td)",
-                "name": f"td:contains({name})",
-                "pnum": "td:nth-child(1)",
-                "name_extracted": "td:nth-child(2)",
-                "standard_grade": "td:nth-child(3)",
-                "allegro_grade": "td:nth-child(4)",
-                "club": "td:nth-child(5)",
-            },
-            source_type="html",
-        )
-
-        config = CrawlerRunConfig(
-            extraction_strategy=extraction_strategy,
-            css_selector="table.member-list tbody tr",
-        )
-
-        async with AsyncWebCrawler() as crawler:
-            result = await crawler.arun(url=url, config=config)
+        async with async_playwright() as p:
+            browser = await p.chromium.launch()
+            page = await browser.new_page()
             
-            if result.success and result.extracted_content:
-                return self._parse_player_result(result.extracted_content, name)
+            await page.goto(f"{self.base_url}/grading/search-players")
+            await page.fill('input[name="surname"]', name)
+            await page.click('button[type="submit"]')
+            await page.wait_for_timeout(3000)
+            
+            content = await page.content()
+            
+            if "No players found" in content:
+                await browser.close()
+                return None
+            
+            # Try to find link using Playwright selector
+            link = await page.query_selector(f'a:has-text("{name.split()[0]}")')
+            if not link:
+                await browser.close()
+                return None
+            
+            player_link = await link.get_attribute('href')
+            player_name = await link.inner_text()
+            
+            pnum_match = re.search(r'/player/(\d+)', player_link)
+            pnum = pnum_match.group(1) if pnum_match else ""
+            
+            await page.goto(f"{self.base_url}{player_link}")
+            await page.wait_for_load_state('networkidle')
+            player_html = await page.content()
+            
+            grade = self._extract_grade(player_html, "Standard")
+            allegro = self._extract_grade(player_html, "Allegro")
+            club = self._extract_club(player_html)
+            
+            await browser.close()
+            return {
+                "name": player_name,
+                "pnum": pnum,
+                "standard_grade": grade,
+                "allegro_grade": allegro,
+                "club": club,
+            }
+
+    def _extract_grade(self, html: str, grade_type: str) -> Optional[int]:
+        # Look for the grade in a table cell that's labeled with the grade type
+        match = re.search(rf'{grade_type}</td><td>(\d+)</td>', html)
+        if match:
+            return int(match.group(1))
         return None
 
-    def _parse_player_result(self, content: str, name: str) -> Optional[Dict[str, Any]]:
-        lines = content.strip().split("\n")
-        for line in lines:
-            if name.lower() in line.lower():
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 5:
-                    return {
-                        "pnum": parts[0] if parts[0] else "",
-                        "name": parts[1] if parts[1] else name,
-                        "standard_grade": self._parse_grade(parts[2]),
-                        "allegro_grade": self._parse_grade(parts[3]),
-                        "club": parts[4] if len(parts) > 4 else "",
-                    }
-        return None
-
-    def _parse_grade(self, value: str) -> Optional[int]:
-        try:
-            return int(value) if value and value != "-" else None
-        except (ValueError, TypeError):
-            return None
+    def _extract_club(self, html: str) -> str:
+        match = re.search(r'Club[^:]*:\s*<td[^>]*>([^<]+)<', html)
+        if match:
+            return match.group(1).strip()
+        return ""
 
     async def get_league_results(
         self, league_query: str
     ) -> Optional[List[Dict[str, Any]]]:
-        url = f"{self.base_url}/grading/results/2026/"
-
-        extraction_strategy = JsonCssExtractionStrategy(
-            {
-                "league_name": "a",
-                "league_link": "a::attr(href)",
-            },
-            source_type="html",
-        )
-
-        config = CrawlerRunConfig(
-            extraction_strategy=extraction_strategy,
-            css_selector="table.league-list, table.results",
-            fit_markdown=True,
-        )
-
-        async with AsyncWebCrawler() as crawler:
-            result = await crawler.arun(url=url, config=config)
+        async with async_playwright() as p:
+            browser = await p.chromium.launch()
+            page = await browser.new_page()
             
-            if not result.success or not result.extracted_content:
-                return None
-
-            league_link = self._find_league_link(result.extracted_content, league_query)
+            await page.goto(f"{self.base_url}/grading/results/2026/")
+            await page.wait_for_load_state('networkidle')
+            
+            content = await page.content()
+            
+            league_link = self._find_league_link(content, league_query)
             if not league_link:
+                await browser.close()
                 return None
-
-            return await self._scrape_league_table(f"{self.base_url}{league_link}")
-
-        return None
+            
+            await page.goto(f"{self.base_url}{league_link}")
+            await page.wait_for_load_state('networkidle')
+            table_html = await page.content()
+            
+            standings = self._parse_league_table(table_html)
+            await browser.close()
+            return standings
 
     def _find_league_link(self, content: str, query: str) -> Optional[str]:
-        lines = content.strip().split("\n")
-        for line in lines:
-            if query.lower() in line.lower() and "href=" in line:
-                start = line.find("href=") + 6
-                end = line.find(")", start)
-                if end > start:
-                    return line[start:end]
+        links = re.findall(r'<a href="(/grading/results/[^"]+)">([^<]+)</a>', content)
+        for link, name in links:
+            if query.lower() in name.lower():
+                return link
         return None
 
-    async def _scrape_league_table(
-        self, url: str
-    ) -> Optional[List[Dict[str, Any]]]:
-        extraction_strategy = JsonCssExtractionStrategy(
-            {
-                "rank": "td:nth-child(1)",
-                "team_name": "td:nth-child(2)",
-                "played": "td:nth-child(3)",
-                "points": "td:nth-child(4)",
-            },
-            source_type="html",
-        )
-
-        config = CrawlerRunConfig(
-            extraction_strategy=extraction_strategy,
-            css_selector="table.standings tbody tr",
-            fit_markdown=True,
-        )
-
-        async with AsyncWebCrawler() as crawler:
-            result = await crawler.arun(url=url, config=config)
-            
-            if result.success and result.extracted_content:
-                return self._parse_league_table(result.extracted_content)
-        return None
-
-    def _parse_league_table(
-        self, content: str
-    ) -> List[Dict[str, Any]]:
+    def _parse_league_table(self, content: str) -> List[Dict[str, Any]]:
         standings = []
-        lines = content.strip().split("\n")
-        
-        for line in lines:
-            if "|" in line:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 4 and parts[0].isdigit():
-                    standings.append({
-                        "rank": int(parts[0]),
-                        "team_name": parts[1],
-                        "played": int(parts[2]) if parts[2].isdigit() else 0,
-                        "points": float(parts[3]) if parts[3].replace(".", "").isdigit() else 0.0,
-                    })
-        
+        rows = re.findall(r'<tr[^>]*>.*?</tr>', content)
+        for row in rows:
+            cells = re.findall(r'<t[dh][^>]*>([^<]+)</t[dh]>', row)
+            if len(cells) >= 4 and cells[0].isdigit():
+                standings.append({
+                    "rank": int(cells[0]),
+                    "team_name": cells[1],
+                    "played": int(cells[2]) if cells[2].isdigit() else 0,
+                    "points": float(cells[3]) if cells[3].replace(".", "").isdigit() else 0.0,
+                })
         return standings
 
 
 async def main():
     scraper = ChessScotlandScraper()
     
-    result = await scraper.get_player_data("John Smith")
+    result = await scraper.get_player_data("Comerford")
     print("Player data:", result)
 
 
