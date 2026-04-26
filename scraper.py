@@ -13,8 +13,14 @@ class ChessScotlandScraper:
             browser = await p.chromium.launch()
             page = await browser.new_page()
             
+            # Try to split into forename and surname
+            name_parts = name.split()
+            surname = name_parts[-1]  # Assume last part is surname
+            forename = ' '.join(name_parts[:-1]) if len(name_parts) > 1 else ''
+            
             await page.goto(f"{self.base_url}/grading/search-players")
-            await page.fill('input[name="surname"]', name)
+            # Search by surname first
+            await page.fill('input[name="surname"]', surname)
             await page.click('button[type="submit"]')
             await page.wait_for_timeout(3000)
             
@@ -24,8 +30,15 @@ class ChessScotlandScraper:
                 await browser.close()
                 return None
             
-            # Try to find link using Playwright selector
-            link = await page.query_selector(f'a:has-text("{name.split()[0]}")')
+            # Try to find link using Playwright selector - gets first match
+            # Improve by looking for full name if provided
+            name_parts = name.split()
+            if len(name_parts) >= 2:
+                # Try full name
+                link = await page.query_selector(f'a:has-text("{name}")')
+            if not link:
+                # Fall back to first match with surname
+                link = await page.query_selector(f'a:has-text("{name_parts[0]}")')
             if not link:
                 await browser.close()
                 return None
