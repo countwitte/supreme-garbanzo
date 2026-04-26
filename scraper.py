@@ -69,20 +69,40 @@ class ChessScotlandScraper:
             return {
                 "name": player_name,
                 "pnum": pnum,
-                "standard_grade": grade,
-                "allegro_grade": allegro,
+                "standard_grade": grade.get("published"),
+                "standard_grade_live": grade.get("live"),
+                "allegro_grade": allegro.get("published"),
+                "allegro_grade_live": allegro.get("live"),
                 "club": club,
             }
 
-    def _extract_grade(self, text: str, grade_type: str) -> Optional[int]:
+    def _extract_grade(self, text: str, grade_type: str) -> dict:
         import re
-        # Find all 4-digit numbers that could be grades
-        matches = re.findall(r'\b(\d{4})\b', text)
-        for m in matches:
-            val = int(m)
-            if val not in [2024, 2025, 2026] and 100 <= val <= 2500:
-                return val
-        return None
+        lines = text.split('\n')
+        
+        published = None
+        live = None
+        
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Published is 2 lines after "Published" label
+            if stripped == 'Published' and i + 2 < len(lines):
+                try:
+                    val = int(lines[i + 2].strip())
+                    if 100 <= val <= 2500:
+                        published = val
+                except:
+                    pass
+            # Live is 2 lines after "Live" label
+            if stripped == 'Live' and i + 2 < len(lines):
+                try:
+                    val = int(lines[i + 2].strip())
+                    if 100 <= val <= 2500:
+                        live = val
+                except:
+                    pass
+        
+        return {"published": published, "live": live}
 
     def _extract_club(self, html: str) -> str:
         match = re.search(r'Club[^:]*:\s*<td[^>]*>([^<]+)<', html)
