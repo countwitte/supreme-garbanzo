@@ -28,9 +28,9 @@ uv run python agent.py
 
 ### Example Queries
 
-- "Find player Michael Comerford" - Get grades for a player
-- "Find player Stephen Maxwell grading" - Get grading info
-- "What's John Smith's standard grade?"
+- "Find player John Smith" - Get grades for a player
+- "Find player Jane Doe grading" - Get grading info
+- "What's Alice Brown's standard grade?"
 
 ### Programmatic Usage
 
@@ -39,11 +39,11 @@ from scraper import ChessScotlandScraper
 
 async def main():
     scraper = ChessScotlandScraper()
-    result = await scraper.get_player_data("Michael Comerford")
+    result = await scraper.get_player_data("John Smith")
     print(result)
-    # {'name': 'Comerford, Michael', 'pnum': '29938', 
-    #  'standard_grade': 904, 'standard_grade_live': 846,
-    #  'allegro_grade': 940, 'allegro_grade_live': 905, 'club': ''}
+    # {'name': 'Smith, John', 'pnum': '12345', 
+    #  'standard_grade': 1200, 'standard_grade_live': 1150,
+    #  'allegro_grade': 1250, 'allegro_grade_live': 1200, 'club': 'Edinburgh'}
 
 asyncio.run(main())
 ```
