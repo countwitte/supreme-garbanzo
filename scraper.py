@@ -117,18 +117,36 @@ class ChessScotlandScraper:
             browser = await p.chromium.launch()
             page = await browser.new_page()
             
-            await page.goto(f"{self.base_url}/grading/results/2026/")
+            # Direct URL for known leagues
+            league_urls = {
+                "glasgow league division 4": "/grading/results/2026/23735/23773",
+                "glasgow league division 3": "/grading/results/2026/23735/23772",
+                "glasgow league division 2": "/grading/results/2026/23735/23744",
+                "glasgow league division 1": "/grading/results/2026/23735/23743",
+                "central league": "/grading/results/2026/23728/23750",
+            }
+            
+            url_path = None
+            query_lower = league_query.lower()
+            for key, path in league_urls.items():
+                if key in query_lower:
+                    url_path = path
+                    break
+            
+            if url_path:
+                await page.goto(f"{self.base_url}{url_path}")
+            else:
+                await page.goto(f"{self.base_url}/grading/results/2026/")
+                await page.wait_for_load_state('networkidle')
+                
+                content = await page.content()
+                url_path = self._find_league_link(content, league_query)
+                if url_path:
+                    await page.goto(f"{self.base_url}{url_path}")
+            
             await page.wait_for_load_state('networkidle')
+            await page.wait_for_timeout(2000)
             
-            content = await page.content()
-            
-            league_link = self._find_league_link(content, league_query)
-            if not league_link:
-                await browser.close()
-                return None
-            
-            await page.goto(f"{self.base_url}{league_link}")
-            await page.wait_for_load_state('networkidle')
             table_html = await page.content()
             
             standings = self._parse_league_table(table_html)
@@ -136,23 +154,58 @@ class ChessScotlandScraper:
             return standings
 
     def _find_league_link(self, content: str, query: str) -> Optional[str]:
-        links = re.findall(r'<a href="(/grading/results/[^"]+)">([^<]+)</a>', content)
+        import re
+        # Try to find exact match first
+        links = re.findall(r'<a href="([^"]+)">([^<]+)</a>', content)
         for link, name in links:
-            if query.lower() in name.lower():
+            if query.lower() in name.lower() or name.lower() in query.lower():
+                return link
+        # Try partial match
+        query_parts = query.lower().split()
+        for link, name in links:
+            name_lower = name.lower()
+            if any(part in name_lower for part in query_parts if len(part) > 3):
                 return link
         return None
 
     def _parse_league_table(self, content: str) -> List[Dict[str, Any]]:
         standings = []
-        rows = re.findall(r'<tr[^>]*>.*?</tr>', content)
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', content, re.DOTALL)
+        
         for row in rows:
             cells = re.findall(r'<t[dh][^>]*>([^<]+)</t[dh]>', row)
-            if len(cells) >= 4 and cells[0].isdigit():
+            # Need at least rank, team name, and some stats
+            if len(cells) >= 3:
+                try:
+                    rank = int(cells[0])
+                except (ValueError, IndexError):
+                    continue
+                
+                team_name = cells[1]
+                
+                # Try to get games played and points from various column positions
+                played = 0
+                points = 0.0
+                
+                if len(cells) >= 3:
+                    try:
+                        played = int(cells[2])
+                    except (ValueError, IndexError):
+                        pass
+                
+                # Points often in later columns - try column 3 or later if 4 columns total
+                if len(cells) >= 4:
+                    try:
+                        points = float(cells[3].replace('*', ''))
+                    except (ValueError, IndexError):
+                        # Try sum of game results from other columns
+                        pass
+                
                 standings.append({
-                    "rank": int(cells[0]),
-                    "team_name": cells[1],
-                    "played": int(cells[2]) if cells[2].isdigit() else 0,
-                    "points": float(cells[3]) if cells[3].replace(".", "").isdigit() else 0.0,
+                    "rank": rank,
+                    "team_name": team_name,
+                    "played": played,
+                    "points": points,
                 })
         return standings
 
